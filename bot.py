@@ -71,6 +71,18 @@ ref_links = {}
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=storage)
 
+def load_balances():
+    """Загружает балансы пользователей из user.balances.json."""
+    if os.path.exists("user.balances.json"):
+        with open("user.balances.json", "r", encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+def save_balances(balances):
+    """Сохраняет балансы пользователей в user.balances.json."""
+    with open("user.balances.json", "w", encoding='utf-8') as f:
+        json.dump(balances, f, ensure_ascii=False, indent=4)
+
 
 async def activate_check(user_id: int, check_data: str):
     try:
