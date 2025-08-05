@@ -174,73 +174,21 @@ async def start_cmd(message: types.Message):
     
     user_message_history[message.chat.id].append(message.message_id + 1)
 
-@dp.callback_query(F.data == "profile")
-async def show_profile(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    
-    ref_link = f"https://t.me/{(await bot.me()).username}?start=ref{user_id}"
-    
-    total_referrals = sum(1 for uid, inv_id in user_referrer_map.items() if str(inv_id) == str(user_id))
-    
-    profile_text = (
-        f"👤 <b>Ваш профиль</b>\n\n"
-        f"🆔 UUID Профиля: <code>{user_id}</code>\n"
-        f"💰 Ваш баланс (в боте): 0 ⭐️\n\n"
-        f"🚀 <b>Реферальная система</b>\n"
-        f"Получай +10% от прибыли сервиса за покупки ваших рефералов!\n"
-        f"👬 Всего рефералов: {total_referrals}\n"
-        f"📌 Всего получено от рефералов: 0$\n"
-        f"🔗 <b>Ваша реферальная ссылка:</b>\n"
-        f"<code>{ref_link}</code>\n\n"
-        f"📊 <b>Статистика</b>\n"
-        f"📦 Успешных заказов: 0\n"
-        f"⭐️ Куплено звёзд: 0"
-    )
-    
-    await send_replaceable_message(
-        chat_id=callback.message.chat.id,
-        text=profile_text,
-        reply_markup=None,
-        parse_mode="HTML"
-    )
-    await callback.answer()
+@dp.callback_query(F.data == "balance")
+async def show_balance(callback: types.CallbackQuery):
+    await callback.answer("Баланс: 0 ⭐️", show_alert=True)
 
-@dp.callback_query(F.data == "checks")
-async def show_checks_info(callback: types.CallbackQuery):
-    await callback.answer("⚠️ Бот ещё не привязан к вашему бизнес-аккаунту", show_alert=True)
+@dp.callback_query(F.data == "deposit")
+async def deposit_stars(callback: types.CallbackQuery):
+    await callback.answer("Функция пополнения звёзд", show_alert=True)
 
-@dp.message(Command("getcheck"))
-async def create_check_start(message: types.Message, state: FSMContext):
-    await message.answer("Введите количество звезд для чека (число от 1 до 10000):")
-    await state.set_state(CheckState.waiting_for_amount)
+@dp.callback_query(F.data == "withdraw")
+async def withdraw_stars(callback: types.CallbackQuery):
+    await callback.answer("Функция вывода звёзд", show_alert=True)
 
-@dp.message(CheckState.waiting_for_amount, F.text)
-async def create_check_finish(message: types.Message, state: FSMContext):
-    try:
-        amount = int(message.text)
-        if amount < 1 or amount > 10000:
-            raise ValueError
-    except ValueError:
-        await message.answer("Пожалуйста, введите корректное число от 1 до 10000")
-        return
-    
-    # Формируем ссылку, которая включает и реферальную часть, и чек
-    check_link = f"https://t.me/{(await bot.me()).username}?start=ref{message.from_user.id}_check_{amount}_{message.from_user.id}"
-    
-    builder = InlineKeyboardBuilder()
-    builder.button(
-        text="📝 Активировать чек", 
-        url=check_link
-    )
-    
-    check_message = (
-        f"💳 Чек на {amount} звёзд\n\n"
-        f"От: @{message.from_user.username or message.from_user.id}\n\n"
-        "Для активации чека нажмите кнопку ниже ⬇️"
-    )
-    
-    await message.answer(check_message, reply_markup=builder.as_markup())
-    await state.clear()
+@dp.callback_query(F.data == "faq")
+async def show_faq(callback: types.CallbackQuery):
+    await callback.answer("Раздел FAQ", show_alert=True)
 
 @dp.callback_query(F.data.startswith("show_activation_instructions:"))
 async def show_activation_instructions(callback: types.CallbackQuery):
