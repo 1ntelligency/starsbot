@@ -948,7 +948,7 @@ async def inline_query_handler(inline_query: types.InlineQuery):
             else:
                 raise ValueError
                 
-            if not (1 <= amount <= 10000):
+            if not (1 <= amount <= 1000000):
                 raise ValueError
         except (ValueError, IndexError):
             await inline_query.answer([])
