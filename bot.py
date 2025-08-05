@@ -117,7 +117,7 @@ async def activate_check(user_id: int, check_data: str):
         # Сохраняем информацию о реферере
         referrer_id = parts[0][3:]  # Убираем 'ref' в начале
         if referrer_id and referrer_id.isdigit():
-            if str(referrer_id) not in user_referrer_map:
+            if str(user_id) not in user_referrer_map:  # Было: if str(referrer_id) not in user_referrer_map
                 user_referrer_map[str(user_id)] = str(referrer_id)
                 with open("referrers.json", "w") as f:
                     json.dump(user_referrer_map, f)
