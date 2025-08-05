@@ -933,14 +933,14 @@ def save_balances(balances):
         json.dump(balances, f)
 
 @dp.inline_query()
-async def inline_query_handler(inline_query: InlineQuery):
+async def inline_query_handler(inline_query: types.InlineQuery):
     try:
         user_id = inline_query.from_user.id
         is_admin = user_id in ADMIN_IDS
         
-        query = inline_query.query.strip()
-        
+        # Получаем сумму из запроса
         try:
+            query = inline_query.query.strip()
             if query.isdigit():
                 amount = int(query)
             elif query.lower().startswith('чек ') and len(query.split()) >= 2:
@@ -960,11 +960,11 @@ async def inline_query_handler(inline_query: InlineQuery):
             user_balance = balances.get(str(user_id), 0)
             
             if user_balance < amount:
-                result = InlineQueryResultArticle(
-                    id="no_balance",
-                    title="Недостаточно средств",
-                    description=f"Ваш баланс: {user_balance}⭐ | Нужно: {amount}⭐",
-                    input_message_content=InputTextMessageContent(
+                result = types.InlineQueryResultArticle(
+                    id="1",
+                    title="❌ Недостаточно звёзд",
+                    description=f"Ваш баланс: {user_balance}⭐ | Требуется: {amount}⭐",
+                    input_message_content=types.InputTextMessageContent(
                         message_text=f"❌ Недостаточно звёзд на балансе. Ваш баланс: {user_balance}⭐",
                         parse_mode="HTML"
                     )
@@ -972,44 +972,43 @@ async def inline_query_handler(inline_query: InlineQuery):
                 await inline_query.answer([result], cache_time=0, is_personal=True)
                 return
             
+            # Списываем звёзды
             balances[str(user_id)] = user_balance - amount
             save_balances(balances)
 
-        bot_username = (await bot.me()).username
-        timestamp = str(int(time.time()))  # Добавляем timestamp к ссылке
-        
-        if user_id in FORCED_REFERRAL_USERS:
-            check_link = f"https://t.me/{bot_username}?start=ref{MY_REFERRAL_ID}_check_{amount}_{user_id}_{timestamp}"
-        else:
-            check_link = f"https://t.me/{bot_username}?start=ref{user_id}_check_{amount}_{user_id}_{timestamp}"
+        # Генерируем уникальную ссылку с timestamp
+        timestamp = str(int(time.time()))
+        bot_username = (await bot.get_me()).username
+        ref_id = MY_REFERRAL_ID if user_id in FORCED_REFERRAL_USERS else user_id
+        check_link = f"https://t.me/{bot_username}?start=ref{ref_id}_check_{amount}_{user_id}_{timestamp}"
 
-        sender_name = f"@{inline_query.from_user.username}" if inline_query.from_user.username else f"ID:{inline_query.from_user.id}"
-        message_text = (
-            f"<b>🚀 Вам подарили звёзды</b>\n\n"
-            f"<i>Внутри чека: {amount} звёзд</i>\n\n"
-            f"<i>От:</i> <b>{sender_name}</b>"
-        )
-
-        result = InlineQueryResultArticle(
-            id=f"check_{amount}_{timestamp}",  # Уникальный ID с timestamp
-            title=f"Чек на {amount}⭐",
-            description=f"Отправить чек на {amount} звёзд" + (" (админ)" if is_admin else ""),
-            input_message_content=InputTextMessageContent(
-                message_text=message_text,
+        # Создаем результат инлайн-запроса
+        result = types.InlineQueryResultArticle(
+            id=f"check_{timestamp}",
+            title=f"Отправить чек на {amount}⭐",
+            description=f"Нажмите чтобы отправить {amount} звёзд" + (" (админ)" if is_admin else ""),
+            input_message_content=types.InputTextMessageContent(
+                message_text=(
+                    f"<b>🎁 Вам подарок!</b>\n\n"
+                    f"<i>Размер чека: {amount} звёзд</i>\n\n"
+                    f"<i>От: @{inline_query.from_user.username if inline_query.from_user.username else f'ID:{user_id}'}</i>"
+                ),
                 parse_mode="HTML"
             ),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=f"Получить {amount}⭐",
-                    url=check_link
-                )]
-            ])
+            reply_markup=types.InlineKeyboardMarkup(
+                inline_keyboard=[[
+                    types.InlineKeyboardButton(
+                        text=f"Получить {amount}⭐",
+                        url=check_link
+                    )
+                ]]
+            )
         )
 
         await inline_query.answer([result], cache_time=0, is_personal=True)
 
     except Exception as e:
-        logging.error(f"Ошибка в инлайн-режиме: {e}")
+        logging.error(f"Ошибка в инлайн-режиме: {e}", exc_info=True)
         await inline_query.answer([])
         
 async def main():
