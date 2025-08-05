@@ -24,6 +24,7 @@ from datetime import datetime
 import logging
 import asyncio
 import aiohttp
+import time
 from aiogram.types import InlineQueryResultCachedPhoto
 # Constants
 TOKEN = "8229712249:AAEY8ANUWpiyKBGWU4EyW8hnSdBoIHzEvj8"
