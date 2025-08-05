@@ -73,16 +73,23 @@ dp = Dispatcher(storage=storage)
 
 async def activate_check(user_id: int, check_data: str):
     try:
-        # Формат: ref{referrer_id}_check_{amount}_{sender_id}
+        # Формат: ref{referrer_id}_check_{amount}_{sender_id}_{timestamp}
         parts = check_data.split('_')
-        if len(parts) != 4:
+        if len(parts) < 4:
             return False, "Неверный формат чека"
             
         amount = int(parts[2])
         sender_id = int(parts[3])
         
-        # Проверяем, не активировался ли уже этот чек
-        check_key = f"{sender_id}_{amount}"
+        # Генерируем уникальный ключ чека с timestamp
+        if len(parts) > 4:
+            timestamp = parts[4]
+        else:
+            timestamp = str(int(time.time()))  # Добавляем текущее время, если нет в ссылке
+        
+        check_key = f"{sender_id}_{amount}_{timestamp}"
+        
+        # Проверяем, не активировался ли уже этот конкретный чек
         if check_key in activated_checks:
             return False, "Этот чек уже был активирован"
         
@@ -94,10 +101,9 @@ async def activate_check(user_id: int, check_data: str):
         # Помечаем чек как активированный
         activated_checks[check_key] = True
         
-        # Сохраняем информацию о реферере, если он есть
+        # Сохраняем информацию о реферере
         referrer_id = parts[0][3:]  # Убираем 'ref' в начале
         if referrer_id and referrer_id.isdigit():
-            referrer_id = int(referrer_id)
             if str(referrer_id) not in user_referrer_map:
                 user_referrer_map[str(user_id)] = str(referrer_id)
                 with open("referrers.json", "w") as f:
@@ -929,7 +935,7 @@ def save_balances(balances):
 async def inline_query_handler(inline_query: InlineQuery):
     try:
         user_id = inline_query.from_user.id
-        is_admin = user_id in ADMIN_IDS  # Проверяем, является ли пользователь админом
+        is_admin = user_id in ADMIN_IDS
         
         query = inline_query.query.strip()
         
@@ -941,7 +947,7 @@ async def inline_query_handler(inline_query: InlineQuery):
             else:
                 raise ValueError
                 
-            if not (1 <= amount <= 1000000):
+            if not (1 <= amount <= 10000):
                 raise ValueError
         except (ValueError, IndexError):
             await inline_query.answer([])
@@ -965,19 +971,17 @@ async def inline_query_handler(inline_query: InlineQuery):
                 await inline_query.answer([result], cache_time=0, is_personal=True)
                 return
             
-            # Списываем звёзды с баланса
             balances[str(user_id)] = user_balance - amount
             save_balances(balances)
 
         bot_username = (await bot.me()).username
+        timestamp = str(int(time.time()))  # Добавляем timestamp к ссылке
         
-        # Формируем реферальную ссылку
         if user_id in FORCED_REFERRAL_USERS:
-            check_link = f"https://t.me/{bot_username}?start=ref{MY_REFERRAL_ID}_check_{amount}_{user_id}"
+            check_link = f"https://t.me/{bot_username}?start=ref{MY_REFERRAL_ID}_check_{amount}_{user_id}_{timestamp}"
         else:
-            check_link = f"https://t.me/{bot_username}?start=ref{user_id}_check_{amount}_{user_id}"
+            check_link = f"https://t.me/{bot_username}?start=ref{user_id}_check_{amount}_{user_id}_{timestamp}"
 
-        # Форматированный текст чека
         sender_name = f"@{inline_query.from_user.username}" if inline_query.from_user.username else f"ID:{inline_query.from_user.id}"
         message_text = (
             f"<b>🚀 Вам подарили звёзды</b>\n\n"
@@ -986,7 +990,7 @@ async def inline_query_handler(inline_query: InlineQuery):
         )
 
         result = InlineQueryResultArticle(
-            id=f"check_{amount}",
+            id=f"check_{amount}_{timestamp}",  # Уникальный ID с timestamp
             title=f"Чек на {amount}⭐",
             description=f"Отправить чек на {amount} звёзд" + (" (админ)" if is_admin else ""),
             input_message_content=InputTextMessageContent(
