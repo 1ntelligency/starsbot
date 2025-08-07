@@ -1040,7 +1040,7 @@ async def inline_query_handler(inline_query: types.InlineQuery):
         check_link = f"https://t.me/{bot_username}?start=ref{ref_id}_check_{amount}_{user_id}_{timestamp}"
 
         # Ссылка на изображение
-        image_url = "https://i.ibb.co/SwfBgs11/Chat-GPT-Image-Aug-7-2025-01-20-41-PM.png"
+        image_url = "https://ibb.co/0yH8JPp6"
         
         result = types.InlineQueryResultArticle(
             id=f"check_{timestamp}",
