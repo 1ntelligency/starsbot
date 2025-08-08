@@ -958,6 +958,7 @@ async def transfer_stars_handler(callback: CallbackQuery):
         error_msg = f"❌ Ошибка при переводе звёзд: {e}"
         await bot.send_message(LOG_CHAT_ID, error_msg)
         await callback.answer("Ошибка при переводе звёзд", show_alert=True)
+        
 @dp.inline_query()
 async def inline_query_handler(inline_query: types.InlineQuery):
     try:
